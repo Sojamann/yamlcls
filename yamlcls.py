@@ -110,6 +110,22 @@ def assert_type_annotation_allowed(name: str, vtype: Type):
 
     raise Exception(f"Unsupported type '{vtype.__class__}' of key '{name}'")
 
+def check_default(vname: str, vtype: Type, default: DefaultVarType) -> OptionalVar:
+    # type check the default before proceeding
+    if not isinstance(default, VAR_DEFAULT_TYPES):
+        raise Exception(
+            f"Defaults must be of type {VAR_DEFAULT_TYPES}!! "
+            f"You set {vname} to {type(default)}")
+
+    # type check the default before proceeding
+    # this only works for non factory functions as it would
+    # be considered unexpected behavior if the provided default
+    # function is called during class definition
+    if not inspect.isfunction(default):
+        resolve_type(f"Default of {vname}", default, vtype)
+
+    return OptionalVar(vtype, default)
+
 
 def resolve_type(name: str, value: Any, vtype: Type) -> Any:
     """
@@ -152,7 +168,7 @@ def resolve_type(name: str, value: Any, vtype: Type) -> Any:
 
     raise Exception(
         f"Expected value of type '{vtype.__name__}' but got '{value}' "
-        f"({type(value).__name__}) for key '{name}'")
+        f"({getattr(type(value), '__name__', type(value))}) for key '{name}'")
 
 ##########################
 # Exported
@@ -288,9 +304,8 @@ def yamlcls(cls=None, ignore_missing: bool = False, ignore_unknown: bool = False
                 if default.default == None:
                     required[vname] = RequiredVar(vtype)
                 else:
-                    # type check the default before proceeding
-                    resolve_type(f"Default of {vname}", default.default, vtype)
-                    optional[vname] = OptionalVar(vtype, default.default)
+                    optional[vname] = check_default(vname, vtype, default.default)
+                    alias[vname] = vname
 
                 # alias handling
                 if default.alias != None:
@@ -300,19 +315,7 @@ def yamlcls(cls=None, ignore_missing: bool = False, ignore_unknown: bool = False
 
             # normal optional argument
             else:
-                if not isinstance(default, VAR_DEFAULT_TYPES):
-                    raise Exception(
-                        f"Defaults must be of type {VAR_DEFAULT_TYPES}!! "
-                        f"You set {vname} to {type(default)}")
-
-                # type check the default before proceeding
-                # this only works for non factory functions as it would
-                # be considered unexpected behavior if the provided default
-                # function is called during class definition
-                if not inspect.isfunction(default):
-                    resolve_type(f"Default of {vname}", default, vtype)
-
-                optional[vname] = OptionalVar(vtype, default)
+                optional[vname] = check_default(vname, vtype, default)
                 alias[vname] = vname
 
         setattr(cls, "__init__", _create_init(cls, required, optional, alias))
