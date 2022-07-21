@@ -1,8 +1,8 @@
+import abc
 import itertools
 import inspect
 from typing import Any, Callable, Dict, List, Union, Type
 
-__all__ = ["yamlcls", "asdict", "yamlfield"]
 
 ########################
 # Helper Types
@@ -42,6 +42,15 @@ class YamlField:
     def __init__(self, alias: str = None, default: DefaultVarType = None):
         self.alias = alias
         self.default = default
+
+class Resolver(abc.ABC):
+    @abc.abstractmethod
+    def is_responsible(self, value: Any, target: Type) -> bool:
+        pass
+
+    @abc.abstractmethod
+    def resolve(self, name: str, value: Any, target: Type) -> Any:
+        pass
 
 #########################
 # Helpers
@@ -126,34 +135,27 @@ def check_default(vname: str, vtype: Type, default: DefaultVarType) -> OptionalV
 
     return OptionalVar(vtype, default)
 
-
-def resolve_type(name: str, value: Any, vtype: Type) -> Any:
-    """
-    Ensures that value is of the expected type.
-    The value might be recursivly resolved if it is nested.
-    """
-    if value is None or vtype == Any:
+#########################
+# Resolvers
+#########################
+class PrimitiveResolver(Resolver):
+    def __init__(self, target: Type):
+        self.target = target
+    def is_responsible(self, value: Any, target: Type) -> bool:
+        return target == self.target
+    def resolve(self, name: str, value: Any, target: Type) -> Any:
+        if not isinstance(value, target):
+            raise WrongType(name, value, target)
         return value
 
-    # Check correctness of primitives
-    if isinstance(value, PRIMITIVES) and vtype in PRIMITIVES and isinstance(value, vtype):
-        return value
+class DictResolver(Resolver):
+    def is_responsible(self, value: Any, target) -> bool:
+        return is_generic_dict(target)
+    def resolve(self, name: str, value: Any, target) -> Any:
+        if not isinstance(value, dict):
+            raise WrongType(name, value, target)
 
-    # Resolve a custom type.
-    # Meaning we get a dict but expect something custom
-    if isinstance(value, dict) \
-            and not isinstance(vtype, PRIMITIVES) \
-            and type(vtype) == type:
-        return vtype(**value)
-
-    # check a typed list (a: List[str])
-    if isinstance(value, list) and is_generic_list(vtype):
-        [ltype] = generic_over(vtype)
-        return [resolve_type(name, n, ltype) for n in value]
-
-    # check a typed dict (a: Dict[str, str])
-    if isinstance(value, dict) and is_generic_dict(vtype):
-        dict_ktype, dict_vtype = generic_over(vtype)
+        dict_ktype, dict_vtype = generic_over(target)
 
         result = dict()
         for k, v in value.items():
@@ -166,13 +168,117 @@ def resolve_type(name: str, value: Any, vtype: Type) -> Any:
 
         return result
 
-    raise Exception(
-        f"Expected value of type '{vtype.__name__}' but got '{value}' "
-        f"({getattr(type(value), '__name__', type(value))}) for key '{name}'")
+class ListResolver(Resolver):
+    def is_responsible(self, value: Any, target: Type) -> bool:
+        return is_generic_list(target)
+    def resolve(self, name: str, value: Any, target: Type) -> Any:
+        if not isinstance(value, list):
+            raise WrongType(name, value, target)
+        [ltype] = generic_over(target)
+        return [resolve_type(name, n, ltype) for n in value]
+
+class ClassResolver(Resolver):
+    def is_responsible(self, value: Any, target: Type) -> bool:
+        return not isinstance(target, PRIMITIVES) and type(target) == type
+    def resolve(self, name: str, value: Any, target: Type) -> Any:
+        if not isinstance(value, dict):
+            raise WrongType(name, value, target)
+        return target(**value)
+
+class NoneResolver(Resolver):
+    def is_responsible(self, value: Any, target: Type) -> bool:
+        return value is None
+    def resolve(self, name: str, value: Any, target: Type) -> Any:
+        return value
+
+class AnyResolver(Resolver):
+    def is_responsible(self, value: Any, target: Type) -> bool:
+        return target == Any
+    def resolve(self, name: str, value: Any, target: Type) -> Any:
+        return value
+
+RESOLVERS = [
+    NoneResolver(),
+    AnyResolver(),
+
+    PrimitiveResolver(int),
+    PrimitiveResolver(float),
+    PrimitiveResolver(str),
+    PrimitiveResolver(bool),
+
+    ClassResolver(),
+
+    ListResolver(),
+    DictResolver(),
+]
+
+def resolve_type(name: str, value: Any, vtype: Type) -> Any:
+    """
+    Ensures that value is of the expected type.
+    The value might be recursivly resolved if it is nested.
+    """
+
+    # instead of a long if elif else structure
+    # ask if threre is a resolver responsible and
+    # let it resolve the value. The predicate to
+    # test if a resolver is responsible can be
+    # more complicated than just to check the vtype
+    for res in RESOLVERS:
+        if res.is_responsible(value, vtype):
+            return res.resolve(name, value, vtype)
+
+    raise WrongType(name, value, vtype)
 
 ##########################
 # Exported
 #########################
+
+class WrongType(Exception):
+    TEMPLATE = "Wrong type '{actual}' with value '{value}' for key '{key}'. " +\
+               "Expected '{target}'."
+    def __init__(self, key: str, value: Any, target: Type) -> None:
+        self.msg = WrongType.TEMPLATE.format(
+            key=key,
+            value=value,
+            actual=getattr(type(value), '__name__', type(value)),
+            target=target,
+        )
+        super().__init__(self)
+    def __str__(self):
+        return self.msg
+
+class UnknownArgument(Exception):
+    TEMPLATE = "Unknown argument '{value}' of type '{actual}' with key '{key}'."
+    def __init__(self, key: str, value: Any) -> None:
+        self.msg = UnknownArgument.TEMPLATE.format(
+            key=key,
+            value=value,
+            actual=getattr(type(value), '__name__', type(value)),
+        )
+        super().__init__(self)
+    def __str__(self):
+        return self.msg
+
+class MissingRequiredArgument(Exception):
+    TEMPLATE = "Missing required argument '{key}' for '{parent}'"
+    def __init__(self, key: str, parent: Type) -> None:
+        self.msg = MissingRequiredArgument.TEMPLATE.format(
+            key=key,
+            parent=parent,
+        )
+        super().__init__(self)
+    def __str__(self):
+        return self.msg
+
+class UnsupportedType(Exception):
+    TEMPLATE = "Value of type '{type}' is not supported"
+    def __init__(self, value: Any) -> None:
+        self.msg = UnsupportedType.TEMPLATE.format(
+            type=getattr(type(value), '__name__', type(value)),
+        )
+        super().__init__(self)
+    def __str__(self):
+        return self.msg
 
 def asdict(inst):
     names = [name for name, _ in get_annotations(inst.__class__)]
@@ -219,9 +325,7 @@ def yamlcls(cls=None, ignore_missing: bool = False, ignore_unknown: bool = False
                 # translate the yaml name to the class name
                 if k not in alias:
                     if not ignore_unknown:
-                        raise Exception(
-                            f"Unknown argument '{v}' of type '{type(v)}' for "
-                            f"'{cls.__name__}' with key '{k}'")
+                        raise UnknownArgument(k, v)
                     continue
 
                 # translate yaml-name to internal one
@@ -241,7 +345,7 @@ def yamlcls(cls=None, ignore_missing: bool = False, ignore_unknown: bool = False
                         f"or optional")
 
                 if not isinstance(v, (str, int, float, list, dict)):
-                    raise Exception(f"Value of type '{type(v)}' is not supported")
+                    raise UnsupportedType(v)
 
                 v = resolve_type(yamlname, v, source[k].type)
                 setattr(self, k, v)
@@ -249,9 +353,7 @@ def yamlcls(cls=None, ignore_missing: bool = False, ignore_unknown: bool = False
             # ensure that all required variables are set
             for k, isset in rset.items():
                 if not isset and not ignore_missing:
-                    raise Exception(
-                        f"Missing required argument '{k}' for "
-                        f"'{cls.__name__}'")
+                    raise MissingRequiredArgument(k, cls.__name__)
 
             # fill defaults for unset variables
             for k, isset in oset.items():
@@ -323,3 +425,12 @@ def yamlcls(cls=None, ignore_missing: bool = False, ignore_unknown: bool = False
         return cls
 
     return wrap if cls is None else wrap(cls)
+
+__all__ = [
+    "yamlcls",
+    "asdict",
+    "yamlfield",
+    "WrongType",
+    "UnknownArgument",
+    "MissingRequiredArgument",
+]

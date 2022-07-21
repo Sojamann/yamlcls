@@ -10,7 +10,7 @@ Additionally yamlcls includes:
 
 ## Get
 ```SH
-wget https://raw.githubusercontent.com/Sojamann/yamlcls/v1.0.0/yamlcls.py
+wget https://raw.githubusercontent.com/Sojamann/yamlcls/v1.0.1/yamlcls.py
 ```
 
 ## Rules
@@ -64,8 +64,7 @@ class A:
     a: int
 
 A(a="2")
-# Exception: Expected value of type '<class 'int'>'
-# but got '2' (<class 'str'>) for key 'a'
+# WrongType: Wrong type 'str' for key 'a'. Expected '<class 'int'>'.
 ```
 ### Missing required argument
 ```PY
@@ -74,7 +73,7 @@ class A:
     a: int
 
 A()
-# Exception: Missing required argument 'a' for 'A'
+# MissingRequiredArgument: Missing required argument 'a' for 'A'
 ```
 
 ### Unknown argument
@@ -84,6 +83,6 @@ class A:
     a: int
 
 A(b=1)
-# Exception: Unknown argument '1' of type '<class 'int'>' for 'A' with key 'b'
+# UnknownArgument: Unknown argument '1' of type 'int' with key 'b'.
 ```
 
