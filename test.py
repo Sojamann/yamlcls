@@ -388,6 +388,25 @@ def test_ignore_missing():
 
     raises(lambda: A({"a": 2}))
 
+def test_options():
+    @yamlcls()
+    class A:
+        a: int = yamlfield(options = [1, 2])
+
+    raises(lambda: A(a=3))
+    raises(lambda: A(a='22'))
+    A(a=2)
+
+    @yamlcls()
+    class A:
+        a: List[int] = yamlfield(options = [[1, 2]])
+
+    raises(lambda: A(a=3))
+    A(a=[1, 2])
+
+    raises_for_default(int, yamlfield(options=["s", "b"]))
+    ok_for_default(List[str], yamlfield(options=[["s"], ["b"]]))
+
 if __name__ == "__main__":
     test_type_validation()
     test_primitive_loading()
@@ -401,3 +420,4 @@ if __name__ == "__main__":
     test_yamlfield()
     test_ignore_unknown()
     test_ignore_missing()
+    test_options()

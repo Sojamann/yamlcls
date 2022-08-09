@@ -39,9 +39,13 @@ class OptionalVar:
         self.default = default
 
 class YamlField:
-    def __init__(self, alias: str = None, default: DefaultVarType = None):
+    def __init__(self,
+                 alias: str = None,
+                 default: DefaultVarType = None,
+                 options: List = None):
         self.alias = alias
         self.default = default
+        self.options = options
 
 class Resolver(abc.ABC):
     @abc.abstractmethod
@@ -280,24 +284,46 @@ class UnsupportedType(Exception):
     def __str__(self):
         return self.msg
 
+class ValueNotAnOption(Exception):
+    TEMPLATE = "Value of type '{type}' with value '{value}' is not an option. " +\
+                "Choose on of: {options}"
+    def __init__(self, value: Any, options: List) -> None:
+        self.msg = UnsupportedType.TEMPLATE.format(
+            type=getattr(type(value), '__name__', type(value)),
+            value=value,
+            options=options
+        )
+        super().__init__(self)
+    def __str__(self):
+        return self.msg
+
 def asdict(inst):
     names = [name for name, _ in get_annotations(inst.__class__)]
     return {name: getattr(inst, name) for name in names if hasattr(inst, name)}
 
-def yamlfield(alias: str = None, default: DefaultVarType = None):
+def yamlfield(alias: str = None,
+              default: DefaultVarType = None,
+              options: List = None
+            ) -> YamlField:
     """
     Just like dataclasses.field does yamlfield provide a way to handle more
     special cases like using a different name in the yaml
     """
+    if default is not None and options is not None:
+        if default not in options:
+            raise ValueNotAnOption(default, options)
+
     # keep the internal representation hidden from the user
-    return YamlField(alias=alias, default=default)
+    return YamlField(alias=alias, default=default, options=options)
 
 def yamlcls(cls=None, ignore_missing: bool = False, ignore_unknown: bool = False):
     """ EVERYTHING NEEES A TYPE HINT!! """
     def _create_init(cls,
                      required: Dict[str, RequiredVar],
                      optional: Dict[str, OptionalVar],
-                     alias: Dict[str, str]):
+                     alias: Dict[str, str],
+                     options: Dict[str, List],
+                    ):
         def _chose_init_source(args: List, kwargs: Dict) -> Dict[Any, Any]:
             # guard against miss-usage
             if min(1, len(args)) + min(1, len(kwargs)) > 1:
@@ -347,6 +373,10 @@ def yamlcls(cls=None, ignore_missing: bool = False, ignore_unknown: bool = False
                 if not isinstance(v, (str, int, float, list, dict)):
                     raise UnsupportedType(v)
 
+                if k in options:
+                    if v not in options[k]:
+                        raise ValueNotAnOption(v, options[k])
+
                 v = resolve_type(yamlname, v, source[k].type)
                 setattr(self, k, v)
 
@@ -388,6 +418,7 @@ def yamlcls(cls=None, ignore_missing: bool = False, ignore_unknown: bool = False
         required: Dict[str, RequiredVar] = dict()
         optional: Dict[str, OptionalVar] = dict()
         alias: Dict[str, str] = dict() # yaml-name to class-name
+        options: Dict[str, List] = dict()
 
         missing = "__MISSING__"
 
@@ -403,14 +434,18 @@ def yamlcls(cls=None, ignore_missing: bool = False, ignore_unknown: bool = False
             # yamlfield was used so this field is special
             elif isinstance(default, YamlField):
                 # default value handling
-                if default.default == None:
+                if default.default is None:
                     required[vname] = RequiredVar(vtype)
                 else:
                     optional[vname] = check_default(vname, vtype, default.default)
                     alias[vname] = vname
 
+                if default.options is not None:
+                    resolve_type(f"Options of {cls.__name__}.{vname}", default.options, List[vtype])
+                    options[vname] = default.options
+
                 # alias handling
-                if default.alias != None:
+                if default.alias is not None:
                     alias[default.alias] = vname
                 else:
                     alias[vname] = vname
@@ -420,7 +455,7 @@ def yamlcls(cls=None, ignore_missing: bool = False, ignore_unknown: bool = False
                 optional[vname] = check_default(vname, vtype, default)
                 alias[vname] = vname
 
-        setattr(cls, "__init__", _create_init(cls, required, optional, alias))
+        setattr(cls, "__init__", _create_init(cls, required, optional, alias, options))
         setattr(cls, "__str__", _create_to_str(cls, required, optional))
         return cls
 

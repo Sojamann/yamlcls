@@ -10,7 +10,7 @@ Additionally yamlcls includes:
 
 ## Get
 ```SH
-wget https://raw.githubusercontent.com/Sojamann/yamlcls/v1.0.1/yamlcls.py
+wget https://raw.githubusercontent.com/Sojamann/yamlcls/v1.1.0/yamlcls.py
 ```
 
 ## Rules
@@ -20,6 +20,7 @@ wget https://raw.githubusercontent.com/Sojamann/yamlcls/v1.0.1/yamlcls.py
 - Use List[..] over list or List
 - Default values of members must be of type
     str, int, float, bool or a factory function
+- Options
 
 ## Example
 ```PY
@@ -85,4 +86,13 @@ class A:
 A(b=1)
 # UnknownArgument: Unknown argument '1' of type 'int' with key 'b'.
 ```
+
+### Wrong options
+```PY
+@yamlcls()
+class A:
+    a: int = yamlfield(options=["1", "2"])
+# WrongType: Wrong type 'str' with value '1' for key 'Options of A.a'. Expected '<class 'int'>'.
+```
+
 
